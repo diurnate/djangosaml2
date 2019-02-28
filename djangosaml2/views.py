@@ -42,7 +42,9 @@ from saml2.sigver import MissingKey
 from saml2.s_utils import UnsupportedBinding
 from saml2.response import (
     StatusError, StatusAuthnFailed, SignatureError, StatusRequestDenied,
-    UnsolicitedResponse, StatusNoAuthnContext,
+    UnsolicitedResponse,
+    StatusNoAuthnContext,
+    StatusNoPassive,
 )
 from saml2.validate import ResponseLifetimeExceed, ToEarly
 from saml2.xmldsig import SIG_RSA_SHA1, SIG_RSA_SHA256  # support for SHA1 is required by spec
@@ -86,7 +88,9 @@ def login(request,
           config_loader_path=None,
           wayf_template='djangosaml2/wayf.html',
           authorization_error_template='djangosaml2/auth_error.html',
-          post_binding_form_template='djangosaml2/post_binding_form.html'):
+          post_binding_form_template='djangosaml2/post_binding_form.html',
+          redirect_to=None,
+          is_passive=None):
     """SAML Authorization Request initiator
 
     This view initiates the SAML2 Authorization handshake
@@ -104,7 +108,7 @@ def login(request,
     """
     logger.debug('Login process started')
 
-    came_from = request.GET.get('next', settings.LOGIN_REDIRECT_URL)
+    came_from = redirect_to or request.GET.get('next', settings.LOGIN_REDIRECT_URL)
     if not came_from:
         logger.warning('The next parameter exists but is empty')
         came_from = settings.LOGIN_REDIRECT_URL
@@ -184,7 +188,7 @@ def login(request,
             session_id, result = client.prepare_for_authenticate(
                 entityid=selected_idp, relay_state=came_from,
                 binding=binding, sign=False, sigalg=sigalg,
-                nsprefix=nsprefix)
+                nsprefix=nsprefix, is_passive=is_passive)
         except TypeError as e:
             logger.error('Unable to know which IdP to use')
             return HttpResponse(text_type(e))
@@ -200,7 +204,8 @@ def login(request,
                 return HttpResponse(text_type(e))
             session_id, request_xml = client.create_authn_request(
                 location,
-                binding=binding)
+                binding=binding,
+                is_passive=is_passive)
             try:
                 if PY3:
                     saml_request = base64.b64encode(binary_type(request_xml, 'UTF-8'))
@@ -269,6 +274,18 @@ def assertion_consumer_service(request,
 
     try:
         response = client.parse_authn_request_response(xmlstr, BINDING_HTTP_POST, outstanding_queries)
+    except StatusNoPassive:
+        # redirect the user to the view where he came from
+        default_relay_state = get_custom_setting('ACS_DEFAULT_REDIRECT_URL',
+                                                 settings.LOGIN_REDIRECT_URL)
+        relay_state = request.POST.get('RelayState', default_relay_state)
+        if not relay_state:
+            logger.warning('The RelayState parameter exists but is empty')
+            relay_state = default_relay_state
+        if not is_safe_url_compat(url=relay_state, allowed_hosts={request.get_host()}):
+            relay_state = settings.LOGIN_REDIRECT_URL
+        logger.debug('Redirecting to the RelayState: %s', relay_state)
+        return HttpResponseRedirect(relay_state)
     except (StatusError, ToEarly):
         logger.exception("Error processing SAML Assertion.")
         return fail_acs_response(request)
