@@ -99,7 +99,8 @@ def login(request,
           authorization_error_template='djangosaml2/auth_error.html',
           post_binding_form_template='djangosaml2/post_binding_form.html',
           redirect_to=None,
-          is_passive=None):
+          is_passive=None,
+          selected_idp=None):
     """SAML Authorization Request initiator
 
     This view initiates the SAML2 Authorization handshake
@@ -146,7 +147,7 @@ def login(request,
                     'came_from': came_from,
                     })
 
-    selected_idp = request.GET.get('idp', None)
+    selected_idp = request.GET.get('idp', selected_idp)
     conf = get_config(config_loader_path, request)
 
     kwargs = {}
